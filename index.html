@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>AR Java Memory & OOP Visualizer</title>
+<script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.5/aframe/build/aframe-ar.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;color:#e8eefc;background:#0b1220;overflow:hidden}
+#ui>*{position:fixed;z-index:50}
+.panel{background:rgba(8,14,28,.86);border:1px solid #2a3a5c;border-radius:10px;padding:8px 10px}
+#top{top:6px;left:6px;right:6px}
+#top h1{margin:0;font-size:15px;color:#7fb2ff}
+#meta{font-size:12px;color:#9fb3d9;margin:2px 0}
+#expl{font-size:14px;line-height:1.35;max-height:17vh;overflow:auto}
+#why{display:none;margin-top:5px;padding-top:5px;border-top:1px dashed #456;font-size:13px;color:#ffd48a}
+#status{top:auto;bottom:auto;left:6px;right:6px;top:calc(6px + 190px);display:none;background:#5a1d1d;border-color:#b44;font-size:13px}
+#code{left:6px;right:6px;bottom:128px;max-height:20vh;overflow:auto;font:12.5px/1.45 Consolas,monospace;white-space:pre}
+#code div{padding:0 6px;border-left:3px solid transparent}
+#code div.on{background:#3a3210;border-left-color:#ffb02e;color:#fff}
+#insp{right:6px;bottom:calc(128px + 21vh);width:min(240px,60vw);font-size:12.5px;display:none}
+#bot{left:6px;right:6px;bottom:6px;display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+button{font-size:14px;padding:12px 4px;border:1px solid #3b5a94;background:#16264a;color:#e8eefc;border-radius:9px;min-height:46px}
+button:active{background:#2f5fc4}
+#menu,#splash{inset:0;background:rgba(5,9,20,.94);display:none;overflow:auto;z-index:100!important;padding:16px}
+#splash{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px}
+#splash h1{color:#7fb2ff;margin:0;font-size:26px}
+#splash .b{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+#splash button{padding:16px 26px;font-size:17px}
+#menu button{display:block;width:100%;text-align:left;margin:6px 0;font-size:16px;padding:13px}
+small{color:#8aa0c8}
+</style>
+</head>
+<body>
+<div id="ui">
+ <div id="top" class="panel"><h1>AR Java Memory &amp; OOP Visualizer</h1>
+  <div id="meta"></div><div id="expl"></div><div id="why"></div></div>
+ <div id="status" class="panel"></div>
+ <div id="code" class="panel"></div>
+ <div id="insp" class="panel"></div>
+ <div id="bot">
+  <button id="bMenu">Concepts</button><button id="bRun">&#9654; Run</button><button id="bPause">&#9208; Pause</button><button id="bPrev">&#9664; Prev</button>
+  <button id="bNext">Next &#9654;</button><button id="bReset">&#8635; Reset</button><button id="bWhy">Explain</button><button id="bMode">AR / 3D</button>
+ </div>
+ <div id="menu"><h2 style="color:#7fb2ff">Java Concepts</h2><div id="mlist"></div><button id="bClose">Close</button></div>
+ <div id="splash">
+  <h1>AR Java Memory &amp; OOP Visualizer</h1>
+  <div style="font-size:17px">Visualize what happens inside Java when your code runs.</div>
+  <div class="b"><button id="sAR">Start AR</button><button id="s3D">Start 3D</button></div>
+  <div>Choose a Java concept to begin.</div>
+  <small>AR mode needs HTTPS/localhost, camera permission and the <b>HIRO</b> marker (print it or show it on another screen).<br>
+  3D mode needs no camera: drag to rotate, tap objects to inspect.<br>
+  This is a simplified conceptual model of Java memory, not a literal JVM layout.</small>
+ </div>
+</div>
+<script>
+// ===================== Configuration =====================
+const C={stack:'#2f7fd8',heap:'#2fa66a',cls:'#8a55d8',ref:'#ffb02e',call:'#22d3ee',gc:'#ff6a3d'};
+const STEP_MS=2400;
+const THREE=AFRAME.THREE;
+const $=id=>document.getElementById(id);
+let mode='3d',root=null,dyn=null,cur=0,ex=null,m=null,timer=null,markerSeen=false;
+
+// ===================== Concept Data =====================
+// Every step: l = highlighted code line, t = explanation, d(m) = mutates the memory model.
+const nw=(m,f)=>{if(m.cum&&m.objs.length){const e=m.objs[0];e.f=Object.assign({},f);e.st='live';return e}const o={id:m.objs.length+1,f:Object.assign({},f),st:'live'};m.objs.push(o);m.fresh.push('o'+o.id);return o};
+const STU={name:'Student',fields:['String name','int age'],ctor:'Student()'};
+const F0=()=>({name:'null',age:'0'});
+const EX=[
+{id:1,title:'Class vs Object',pre:false,cls:STU,
+ code:['class Student {','    String name;','    int age;','}','Student s1 = new Student();','Student s2 = new Student();'],
+ steps:[
+ {l:0,t:'A class is a blueprint. It describes what data (name, age) and behaviour objects will have. No object exists yet.',d:m=>m.showCls=true},
+ {l:4,t:'new Student() builds Object #1 from the blueprint. The reference s1 on the stack points to it.',d:m=>{m.refs.s1=nw(m,F0()).id}},
+ {l:5,t:'The same class creates a second, separate object. One class can create many objects.',d:m=>{m.refs.s2=nw(m,F0()).id}}],
+ q:'Why are there two objects?',a:'Each new creates a fresh object from the same class. s1 and s2 refer to different objects.'},
+{id:2,title:'Instance Variables',pre:false,cls:STU,
+ code:['class Student {','    String name;','    int age;','}','Student s1 = new Student();','Student s2 = new Student();','s1.name = "Ram";','s2.name = "Sam";'],
+ steps:[
+ {l:0,t:'Class Student declares instance variables name and age.',d:m=>m.showCls=true},
+ {l:4,t:'Object #1 created. Its own copy of name and age gets default values.',d:m=>{m.refs.s1=nw(m,F0()).id}},
+ {l:5,t:'Object #2 created with its own separate copy of the fields.',d:m=>{m.refs.s2=nw(m,F0()).id}},
+ {l:6,t:'Only Object #1 changes: name = "Ram".',d:m=>{m.objs[0].f.name='"Ram"';m.flash='o1'}},
+ {l:7,t:'Only Object #2 changes: name = "Sam". Instance variables belong to individual objects.',d:m=>{m.objs[1].f.name='"Sam"';m.flash='o2'}}],
+ q:'Does s2.name = "Sam" change s1.name?',a:'No. Every object has its own copy of each instance variable.'},
+{id:3,title:'Static vs Instance',pre:false,cls:{name:'Student',fields:['String name'],statics:{college:'"ABC"'},ctor:'Student()'},
+ code:['class Student {','    static String college = "ABC";','    String name;','}','Student s1 = new Student();','Student s2 = new Student();','s1.name = "Ram";','s2.name = "Sam";','Student.college = "XYZ";'],
+ steps:[
+ {l:0,t:'Class-level (static) data is shown in the purple area. college exists once for the class, not once per object.',d:m=>m.showCls=true},
+ {l:4,t:'Object #1 created in the heap. It gets its own name. It does not get its own college.',d:m=>{m.refs.s1=nw(m,{name:'null'}).id}},
+ {l:5,t:'Object #2 created. Both objects see the same shared college value (purple links).',d:m=>{m.refs.s2=nw(m,{name:'null'}).id}},
+ {l:6,t:'Instance variable: Object #1 gets name = "Ram".',d:m=>{m.objs[0].f.name='"Ram"';m.flash='o1'}},
+ {l:7,t:'Instance variable: Object #2 gets its own name = "Sam".',d:m=>{m.objs[1].f.name='"Sam"';m.flash='o2'}},
+ {l:8,t:'Static variable changed once. Both objects now see "XYZ" because the value is shared.',d:m=>{m.statics.college='"XYZ"';m.flash='static'}}],
+ q:'After Student.college = "XYZ", what does s1 see?',a:'"XYZ". There is only one college variable, shared by all Student objects. name stays separate per object.'},
+{id:4,title:'References',pre:true,cls:STU,
+ code:['Student s1 = new Student();'],
+ steps:[
+ {l:0,t:'s1 is a reference variable. It lives in a stack frame (main) and holds no object yet.',d:m=>{m.refs.s1=null}},
+ {l:0,t:'The object lives in the heap. The animated arrow shows s1 pointing (referring) to it.',d:m=>{m.refs.s1=nw(m,F0()).id}}],
+ q:'Where is the object and where is s1?',a:'s1 is a variable in the stack frame. The object is in the heap. s1 only refers to it.'},
+{id:5,title:'Two References, One Object',pre:true,cls:STU,
+ code:['Student s1 = new Student();','Student s2 = s1;','s1 = null;'],
+ steps:[
+ {l:0,t:'One object is created. s1 refers to it.',d:m=>{m.refs.s1=nw(m,F0()).id}},
+ {l:1,t:'s2 = s1 copies the reference, not the object. Still ONE object, two references.',d:m=>{m.refs.s2=m.refs.s1}},
+ {l:2,t:'s1 now holds null. The object is still reachable through s2.',d:m=>{m.refs.s1=null}}],
+ q:'Is the object lost after s1 = null?',a:'No. s2 still refers to it, so the object stays reachable.'},
+{id:6,cum:true,title:'Object Creation (new)',pre:true,cls:STU,
+ code:['Student s = new Student();'],
+ steps:[
+ {l:0,t:'1. Reference variable s is declared on the stack. It is null for now.',d:m=>{m.refs.s=null}},
+ {l:0,t:'2. new Student() requests a new object in the heap (shown as a faint placeholder).',d:m=>{const o=nw(m,F0());o.st='req'}},
+ {l:0,t:'3. Memory for the object is created. Fields hold default values.',d:m=>{const o=nw(m,F0());o.st='new'}},
+ {l:0,t:'4. The constructor Student() runs in a temporary stack frame.',d:m=>{const o=nw(m,F0());o.st='new';m.frames.push({n:'Student()',v:[['this','@1']]});m.fresh.push('fStudent()')}},
+ {l:0,t:'5. Constructor finished, its frame is gone. s now points to the object.',d:m=>{nw(m,F0());m.refs.s=1}}],
+ q:'When does s start pointing to the object?',a:'Only after new finishes creating the object and running the constructor.'},
+{id:7,cum:true,title:'Constructor',pre:true,cls:{name:'Student',fields:['String name'],ctor:'Student(String name)'},
+ code:['class Student {','    String name;','    Student(String name) {','        this.name = name;','    }','}','Student s = new Student("Ram");'],
+ steps:[
+ {l:6,t:'new Student("Ram"): the object is created first, with name = null.',d:m=>{m.refs.s=null;nw(m,{name:'null'}).st='new'}},
+ {l:2,t:'The constructor is called. It gets a temporary stack frame with this and the parameter name.',d:m=>{nw(m,{name:'null'}).st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.fresh.push('fStudent(String)')}},
+ {l:3,t:'this.name = name copies "Ram" into the object field.',d:m=>{const o=nw(m,{name:'"Ram"'});o.st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.flash='o1'}},
+ {l:6,t:'Constructor returns, its frame disappears. The object is initialized and s refers to it.',d:m=>{nw(m,{name:'"Ram"'});m.refs.s=1}}],
+ q:'What happens to the constructor frame?',a:'It exists only while the constructor runs, then it is removed. The object stays in the heap.'},
+{id:8,cum:true,title:'this Keyword',pre:true,cls:{name:'Student',fields:['String name'],ctor:'Student(String name)'},
+ code:['class Student {','    String name;','    Student(String name) {','        this.name = name;','    }','}','Student s = new Student("Ram");'],
+ steps:[
+ {l:6,t:'Constructor frame appears. this (orange arrow) refers to the new object.',d:m=>{m.refs.s=null;nw(m,{name:'null'}).st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.fresh.push('fStudent(String)')}},
+ {l:2,t:'name (highlighted in the stack frame) is the constructor PARAMETER, a local variable.',d:m=>{nw(m,{name:'null'}).st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.hl='param'}},
+ {l:3,t:'this.name (highlighted in the object) is the object FIELD in the heap.',d:m=>{nw(m,{name:'null'}).st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.hl='field'}},
+ {l:3,t:'this.name = name: the parameter value is copied into the field.',d:m=>{nw(m,{name:'"Ram"'}).st='new';m.frames.push({n:'Student(String)',v:[['this','@1'],['name','"Ram"']]});m.hl='field';m.flash='o1'}},
+ {l:6,t:'Frame removed. The field keeps "Ram". s refers to the object.',d:m=>{nw(m,{name:'"Ram"'});m.refs.s=1}}],
+ q:'Why write this.name = name?',a:'Both are called name. this.name is the field, plain name is the parameter that shadows it.'},
+{id:9,cum:true,title:'Methods & Stack',pre:true,cls:{name:'Calculator',fields:[],ctor:'(default)',methods:'int add(int a,int b)'},
+ code:['class Calculator {','    int add(int a, int b) {','        int result = a + b;','        return result;','    }','}','Calculator c = new Calculator();','int x = c.add(10, 20);'],
+ steps:[
+ {l:6,t:'Calculator object created in the heap. c in main() refers to it.',d:m=>{m.refs.c=nw(m,{}).id}},
+ {l:7,t:'add() is called: a new stack frame appears on top of main() with a = 10, b = 20.',d:m=>{m.refs.c=nw(m,{}).id;m.loc.x='?';m.frames.push({n:'add()',v:[['this','@1'],['a','10'],['b','20']]});m.fresh.push('fadd()')}},
+ {l:2,t:'Inside add(): result = 10 + 20 = 30.',d:m=>{m.refs.c=nw(m,{}).id;m.loc.x='?';m.frames.push({n:'add()',v:[['this','@1'],['a','10'],['b','20'],['result','30']]})}},
+ {l:3,t:'return result: 30 travels back to main(), the add() frame disappears, x = 30.',d:m=>{m.refs.c=nw(m,{}).id;m.loc.x='30';m.ret=30}}],
+ q:'What happens to a, b, result after return?',a:'They lived in the add() frame, which is removed when the method finishes. Only the returned value survives.'},
+{id:10,cum:true,title:'Null & Garbage Eligibility',pre:true,cls:STU,
+ code:['Student s = new Student();','s = null;'],
+ steps:[
+ {l:0,t:'Object #1 is reachable through s.',d:m=>{m.refs.s=nw(m,F0()).id}},
+ {l:1,t:'s = null. Nothing refers to the object, so it is ELIGIBLE for garbage collection.',d:m=>{nw(m,F0());m.refs.s=null}},
+ {l:1,t:'Eligible does not mean destroyed. The object stays until the garbage collector actually runs, at a time the JVM decides.',d:m=>{nw(m,F0());m.refs.s=null}}],
+ q:'Is the object deleted immediately?',a:'No. It becomes eligible for GC. The JVM frees it later, when it chooses.'},
+{id:11,cum:true,title:'Multiple References & GC',pre:true,cls:STU,
+ code:['Student a = new Student();','Student b = a;','a = null;','b = null;'],
+ steps:[
+ {l:0,t:'One object, referenced by a.',d:m=>{m.refs.a=nw(m,F0()).id}},
+ {l:1,t:'b = a: now two references to the same object.',d:m=>{m.refs.a=nw(m,F0()).id;m.refs.b=1}},
+ {l:2,t:'a = null, but b still refers to the object. It is NOT garbage.',d:m=>{m.refs.a=nw(m,F0()).id;m.refs.b=1;m.refs.a=null}},
+ {l:3,t:'b = null: no references left. The object is unreachable, so it is eligible for GC.',d:m=>{m.refs.a=nw(m,F0()).id;m.refs.b=1;m.refs.a=null;m.refs.b=null}}],
+ q:'After a = null, is the object eligible for GC?',a:'No, b still refers to it. It becomes eligible only when b is also null (no reachable reference).'}
+];
+// Examples with cum:true re-declare their single object in each step (nw reuses it).
+
+// ===================== Memory Model =====================
+// Replays steps 0..n on a fresh model so Previous/Reset are exact. Objects keep stable ids.
+function buildModel(n){
+ const mm={cum:!!ex.cum,showCls:!!ex.pre,statics:Object.assign({},ex.cls.statics||{}),objs:[],refs:{},loc:{},frames:[],fresh:[],flash:null,hl:null,ret:null};
+ for(let i=0;i<n;i++){mm.fresh=[];mm.flash=null;mm.hl=null;mm.ret=null;mm.frames=[];ex.steps[i].d(mm)}
+ mm.objs.forEach(o=>{if(o.st==='live'||o.st==='gc')o.st=isReachable(mm,o.id)?'live':'gc'});
+ return mm;
+}
+function dedupe(a){const seen={},out=[];a.forEach(o=>{if(!seen[o.id]){seen[o.id]=1;out.push(o)}});return out}
+function isReachable(mm,id){return Object.values(mm.refs).includes(id)||mm.frames.some(f=>f.v.some(v=>v[1]==='@'+id))}
+function refNames(mm,id){const n=Object.keys(mm.refs).filter(k=>mm.refs[k]===id);mm.frames.forEach(f=>f.v.forEach(v=>{if(v[1]==='@'+id)n.push(f.n+':'+v[0])}));return n}
+
+// ===================== Scene Creation =====================
+function mk(tag,at,parent){const e=document.createElement(tag);for(const k in at)e.setAttribute(k,at[k]);(parent||dyn).appendChild(e);return e}
+function txt(s,x,y,z,col,w,parent,rot){const a={value:s,position:x+' '+y+' '+z,color:col||'#fff',width:w||4.5,align:'center'};if(rot)a.rotation=rot;return mk('a-text',a,parent)}
+function box(x,y,z,w,h,d,col,op,parent,cls){return mk('a-box',{position:x+' '+y+' '+z,width:w,height:h,depth:d,color:col,opacity:op||1,class:cls||''},parent)}
+function buildEnvironment(){
+ const p=(x,z,w,d,col,label)=>{box(x,0,z,w,.16,d,col,.9,root);txt(label,x,.2,z+d/2-.25,'#fff',4.2,root,'-55 0 0')};
+ p(-3.4,1.55,2.8,4.7,'#14335f','STACK (method frames)');
+ p(1.2,1.55,6.2,4.7,'#0f4a33','HEAP (objects)');
+ p(-.25,-3.2,9.1,2,'#3a2370','CLASS / STATIC DATA (conceptual)');
+ dyn=mk('a-entity',{},root);
+}
+const FSLOT=i=>[-3.4,2.7-i*2.2];
+const OPOS=i=>[-.75+(i%3)*1.95,1.4-Math.floor(i/3)*1.7];
+function grow(e){e.setAttribute('animation__g','property:scale;from:0.05 0.05 0.05;to:1 1 1;dur:650;easing:easeOutBack')}
+function pulse(e){e.setAttribute('animation__f','property:scale;from:1 1 1;to:1.12 1.12 1.12;dir:alternate;dur:300;loop:4')}
+function link(a,b,col,r,op){ // cylinder between a and b with arrowhead and travelling dot
+ const A=new THREE.Vector3(...a),B=new THREE.Vector3(...b),d=B.clone().sub(A),len=d.length(),n=d.clone().normalize();
+ const q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),n);
+ const e=new THREE.Euler().setFromQuaternion(q,'YXZ'),rot=[e.x,e.y,e.z].map(v=>THREE.MathUtils.radToDeg(v)).join(' ');
+ const mid=A.clone().add(B).multiplyScalar(.5);
+ mk('a-cylinder',{position:mid.toArray().join(' '),rotation:rot,radius:r||.04,height:len,color:col,opacity:op||1});
+ return {n,rot,A,B};
+}
+function arrow(a,b,col){
+ const L=link(a,b,col,.045);
+ const tip=L.B.clone().sub(L.n.clone().multiplyScalar(.14));
+ mk('a-cone',{position:tip.toArray().join(' '),rotation:L.rot,'radius-bottom':.12,'radius-top':0,height:.28,color:col});
+ const s=mk('a-sphere',{radius:.08,color:'#fff',position:a.join(' ')});
+ s.setAttribute('animation','property:position;to:'+b.join(' ')+';dur:1500;loop:true;easing:linear');
+}
+
+// ===================== Render (model -> 3D) =====================
+function render(){
+ while(dyn.firstChild)dyn.removeChild(dyn.firstChild);
+ // class + static area
+ if(m.showCls){
+  const k=ex.cls,lines=['class '+k.name].concat(k.fields.map(f=>'  '+f),k.ctor?['  '+k.ctor]:[],k.methods?['  '+k.methods]:[]);
+  const g=mk('a-entity',{position:'-2.5 .9 -3.2'});grow(g);
+  box(0,0,0,3.6,1.6,.3,C.cls,1,g,'clickable').addEventListener('click',()=>inspect({k:'cls'}));
+  lines.forEach((s,i)=>txt(s,0,.58-i*.26,.17,i?'#e9dcff':'#fff',4.4,g));
+  if(k.statics){
+   const sg=mk('a-entity',{position:'2.1 .9 -3.2'});grow(sg);if(m.flash==='static')pulse(sg);
+   box(0,0,0,3.2,1.2,.3,'#6b3fc4',1,sg,'clickable').addEventListener('click',()=>inspect({k:'static'}));
+   txt('STATIC DATA (shared)',0,.4,.17,'#e9dcff',4,sg);
+   Object.keys(k.statics).forEach((key,i)=>txt(k.name+'.'+key+' = '+m.statics[key],0,.05-i*.3,.17,'#fff',4.4,sg));
+   txt('ONE copy for all objects',0,-.4,.17,'#c4a3ff',3.6,sg);
+  }
+ }
+ // heap objects
+ m.objs.forEach((o,i)=>{
+  const [x,z]=OPOS(i),col={live:'#1f7a4d',gc:'#9a3c1c',new:'#0e6b7a',req:'#4a5568'}[o.st];
+  const g=mk('a-entity',{position:x+' .88 '+z});
+  if(m.fresh.includes('o'+o.id))grow(g);if(m.flash==='o'+o.id)pulse(g);
+  if(o.st==='req')g.setAttribute('scale','.6 .6 .6');
+  box(0,0,0,1.8,1.6,.3,col,o.st==='gc'||o.st==='req'?.55:1,g,'clickable').addEventListener('click',()=>inspect({k:'obj',id:o.id}));
+  txt('Object #'+o.id,0,.62,.17,'#fff',4,g);
+  txt('instance of '+(ex.cls.name),0,.38,.17,'#bfe9d0',3.2,g);
+  let r=.12;
+  Object.keys(o.f).forEach(f=>{txt(f+' = '+o.f[f],0,r,.17,(m.hl==='field'&&f==='name')?'#22d3ee':'#fff',4,g);r-=.25});
+  if(ex.cls.statics&&m.showCls){Object.keys(ex.cls.statics).forEach(f=>{txt(f+' = '+m.statics[f]+' (shared)',0,r,.17,'#c4a3ff',3.6,g);r-=.25})}
+  txt({live:'reachable',gc:'GC ELIGIBLE (not freed yet)',new:'constructing...',req:'requested...'}[o.st],0,-.62,.17,o.st==='gc'?C.gc:'#d6ffe9',3.2,g);
+  if(ex.cls.statics&&m.showCls&&o.st!=='req')link([2.1,.9,-3.05],[x,1.7,z-.1],C.cls,.025,.7);
+ });
+ // stack frames
+ const mainVars=Object.keys(m.refs).map(k=>[k,m.refs[k]==null?'null':'@'+m.refs[k]]).concat(Object.keys(m.loc).map(k=>[k,m.loc[k]]));
+ const frames=[{n:'main()',v:mainVars}].concat(m.frames);
+ frames.forEach((f,i)=>{
+  const [fx,fz]=FSLOT(i),h=.55+.27*f.v.length,top=.08+h;
+  const g=mk('a-entity',{position:fx+' 0 '+fz});
+  if(m.fresh.includes('f'+f.n))grow(g);
+  box(0,.08+h/2,0,2.2,h,.3,i?'#0e7490':C.stack,1,g,'clickable').addEventListener('click',()=>inspect({k:'frame',f}));
+  txt(f.n,0,top-.25,.17,'#fff',4.4,g);
+  f.v.forEach((v,j)=>{
+   const y=top-.52-j*.27,isRef=String(v[1])[0]==='@',isNull=v[1]==='null';
+   const hi=m.hl==='param'&&v[0]==='name'&&i>0;
+   txt((hi?'>> ':'')+v[0]+(isRef?' -> ref':' = '+v[1]),0,y,.17,hi?'#ffe066':isRef?'#ffd48a':isNull?'#9aa8c4':'#fff',4.3,g);
+   if(isRef){const id=+v[1].slice(1),oi=m.objs.findIndex(o=>o.id===id);if(oi>=0){const [ox,oz]=OPOS(oi);arrow([fx+1.15,y+.08,fz],[ox-.95,.9,oz],C.ref)}}
+  });
+ });
+ if(m.ret!=null){ // return value travelling from add() frame back to main()
+  const a=FSLOT(1),b=FSLOT(0),s=mk('a-sphere',{radius:.16,color:C.call,position:a[0]+' 1.2 '+a[1]});
+  s.setAttribute('animation','property:position;to:'+b[0]+' 1.2 '+b[1]+';dur:1600;loop:true;easing:easeInOutQuad');
+  txt('return '+m.ret,-3.4,1.9,1.9,C.call,4,dyn);
+ }
+}
+
+// ===================== Inspector =====================
+function inspect(i){
+ let h='';
+ if(i.k==='obj'){const o=m.objs.find(z=>z.id===i.id),r=refNames(m,o.id);
+  h='<b>Object #'+o.id+'</b><br>Class: '+ex.cls.name+'<br>Instance variables:<br>'+(Object.keys(o.f).map(f=>'&nbsp;'+f+' = '+o.f[f]).join('<br>')||'&nbsp;(none)')+'<br>Referenced by: '+(r.join(', ')||'nothing')+'<br>Status: '+(o.st==='gc'?'<span style="color:#ff6a3d">Unreachable, GC eligible</span>':o.st==='live'?'Reachable':o.st);
+ }else if(i.k==='static'||i.k==='cls'){const k=ex.cls;
+  h='<b>'+k.name+'.class data</b><br>'+(k.statics?Object.keys(k.statics).map(f=>f+' = '+m.statics[f]).join('<br>')+'<br>Shared: Yes':'Fields: '+(k.fields.join(', ')||'none')+'<br>Blueprint for objects');
+ }else{h='<b>'+i.f.n+'</b><br>'+i.f.v.map(v=>v[0]+' = '+(String(v[1])[0]==='@'?'ref #'+v[1].slice(1):v[1])).join('<br>')}
+ $('insp').innerHTML=h+'<br><small>(tap panel to close)</small>';$('insp').style.display='block';
+}
+
+// ===================== Animation / Execution =====================
+function goTo(n){
+ cur=Math.max(0,Math.min(ex.steps.length,n));
+ m=buildModel(cur);render();updateUI();
+}
+function stop(){if(timer){clearInterval(timer);timer=null}}
+function run(){
+ if(timer)return;
+ if(cur>=ex.steps.length)goTo(0);
+ goTo(cur+1);
+ timer=setInterval(()=>{if(cur>=ex.steps.length){stop();return}goTo(cur+1)},STEP_MS);
+}
+function resetAll(){stop();$('insp').style.display='none';$('why').style.display='none';goTo(0)}
+function selectConcept(id){stop();ex=EX.find(e=>e.id===id);$('menu').style.display='none';$('insp').style.display='none';$('why').style.display='none';goTo(0)}
+
+// ===================== UI =====================
+const INTRO='Press Run or Next. This is a simplified conceptual model of Java memory, not a literal JVM layout.';
+function updateUI(){
+ $('meta').textContent='Concept '+ex.id+'/'+EX.length+': '+ex.title+'  |  Step '+cur+'/'+ex.steps.length+'  |  '+(mode==='ar'?'AR (HIRO marker)':'3D mode');
+ $('expl').textContent=cur?ex.steps[cur-1].t:INTRO;
+ const ln=cur?ex.steps[cur-1].l:-1;
+ $('code').innerHTML=ex.code.map((c,i)=>'<div class="'+(i===ln?'on':'')+'">'+c.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</div>').join('');
+ const on=$('code').querySelector('.on');if(on)on.scrollIntoView({block:'nearest'});
+ $('why').innerHTML='<b>What happens?</b> '+ex.q+'<br><b>Explanation:</b> '+ex.a;
+}
+function showStatus(s){const e=$('status');e.textContent=s;e.style.display=s?'block':'none'}
+
+// ===================== AR / 3D Mode =====================
+function initScene(md){
+ mode=md;$('splash').style.display='none';
+ const common='vr-mode-ui="enabled:false" cursor="rayOrigin:mouse" raycaster="objects:.clickable"';
+ const lights='<a-entity light="type:ambient;intensity:.9"></a-entity><a-entity light="type:directional;intensity:.8" position="2 6 4"></a-entity>';
+ const inner='<a-entity id="world"><a-entity id="inner" position="0.25 0 0.15"></a-entity></a-entity>';
+ let html;
+ if(md==='ar'){
+  html='<a-scene '+common+' renderer="alpha:true;antialias:true" arjs="sourceType:webcam;debugUIEnabled:false;detectionMode:mono">'+lights+
+   '<a-marker preset="hiro" id="mk"><a-entity scale=".11 .11 .11" position="0 .02 0">'+inner+'</a-entity></a-marker><a-entity camera></a-entity></a-scene>';
+ }else{
+  html='<a-scene '+common+' background="color:#0b1220">'+lights+
+   '<a-plane rotation="-90 0 0" position="0 -.1 0" width="40" height="40" color="#0d1730"></a-plane>'+
+   inner+'<a-entity camera position="-.3 6.2 9.8" rotation="-33 0 0" look-controls="enabled:false" wasd-controls="enabled:false"></a-entity></a-scene>';
+ }
+ document.body.insertAdjacentHTML('afterbegin',html);
+ const sc=document.querySelector('a-scene');
+ sc.addEventListener('loaded',()=>{
+  root=$('inner');buildEnvironment();goTo(0);
+  if(md==='ar'){
+   const mkr=$('mk');
+   mkr.addEventListener('markerFound',()=>{markerSeen=true;showStatus('')});
+   mkr.addEventListener('markerLost',()=>showStatus('Marker lost. Point the camera at the HIRO marker.'));
+   setTimeout(()=>{if(!markerSeen)showStatus('Marker not detected. Show the HIRO marker in good light, or switch to 3D Mode.')},9000);
+  }
+ });
+ if(md==='ar'){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)showStatus('AR camera access is unavailable (needs HTTPS or localhost). Switch to 3D Mode to continue.');
+  else showStatus('Point the camera at the HIRO marker...');
+  window.addEventListener('camera-error',()=>showStatus('AR camera access is unavailable. Switch to 3D Mode to continue.'));
+ }else enableDragRotate();
+}
+function enableDragRotate(){ // 3D mode: drag on canvas rotates the whole environment
+ let down=false,x0=0;
+ document.addEventListener('pointerdown',e=>{if(e.target.tagName==='CANVAS'){down=true;x0=e.clientX}});
+ document.addEventListener('pointermove',e=>{if(down){const w=$('world');if(w){w.object3D.rotation.y+=(e.clientX-x0)*.01}x0=e.clientX}});
+ document.addEventListener('pointerup',()=>down=false);
+}
+
+// ===================== Event Handlers =====================
+$('bRun').onclick=run;
+$('bPause').onclick=stop;
+$('bNext').onclick=()=>{stop();goTo(cur+1)};
+$('bPrev').onclick=()=>{stop();goTo(cur-1)};
+$('bReset').onclick=resetAll;
+$('bWhy').onclick=()=>{const w=$('why');w.style.display=w.style.display==='block'?'none':'block'};
+$('bMenu').onclick=()=>{$('menu').style.display='block'};
+$('bClose').onclick=()=>{$('menu').style.display='none'};
+$('bMode').onclick=()=>{location.search='?mode='+(mode==='ar'?'3d':'ar')+'&c='+ex.id};
+$('insp').onclick=()=>{$('insp').style.display='none'};
+$('sAR').onclick=()=>initScene('ar');
+$('s3D').onclick=()=>initScene('3d');
+EX.forEach(e=>{const b=document.createElement('button');b.textContent=e.id+'. '+e.title;b.onclick=()=>selectConcept(e.id);$('mlist').appendChild(b)});
+(function boot(){
+ const q=new URLSearchParams(location.search);
+ ex=EX.find(e=>e.id===+q.get('c'))||EX[0];
+ m=buildModel(0);updateUI();
+ if(q.get('mode')==='ar'||q.get('mode')==='3d')initScene(q.get('mode'));
+})();
+</script>
+</body>
+</html>
